@@ -328,6 +328,32 @@ class QueueTest extends AsyncTestCase
         $this->queue->complete();
     }
 
+    public function testBackpressureRelievedAfterCompletionThenDisposal(): void
+    {
+        $emit1 = $this->queue->pushAsync(1);
+        $emit2 = $this->queue->pushAsync(2);
+
+        $pipeline = $this->queue->pipe()->getIterator();
+        $consume = async(function () use ($pipeline) {
+            $pipeline->continue();
+            return $pipeline->getValue();
+        });
+
+        $this->queue->complete();
+
+        self::assertSame(1, $consume->await());
+        $emit1->await();
+
+        $pipeline->dispose();
+        self::assertTrue($this->queue->isDisposed());
+
+        try {
+            $emit2->await();
+            $this->fail(\sprintf('Expected instance of %s to be thrown', DisposedException::class));
+        } catch (DisposedException) {
+        }
+    }
+
     public function testTraversable(): void
     {
         EventLoop::queue(function (): void {
@@ -584,5 +610,19 @@ class QueueTest extends AsyncTestCase
         $future2->await();
 
         self::assertFalse($future1->await());
+    }
+
+    public function testDisposalWhileWaiting(): void
+    {
+        $queue = new Queue();
+        $iterator = $queue->iterate();
+
+        $future = async(fn () => $iterator->continue());
+
+        async(fn () => $iterator->dispose());
+
+        $this->expectException(DisposedException::class);
+
+        $future->await();
     }
 }
